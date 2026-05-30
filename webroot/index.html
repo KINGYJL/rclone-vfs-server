@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Rclone VFS</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0a;
+  --card: #141414;
+  --border: #222;
+  --text: #e0e0e0;
+  --text2: #888;
+  --green: #00e676;
+  --red: #ff5252;
+  --blue: #448aff;
+  --yellow: #ffd740;
+  --cyan: #00bcd4;
+}
+body {
+  font-family: -apple-system, 'Noto Sans SC', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 16px;
+  padding-bottom: 32px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 16px;
+  background: var(--card);
+  border-radius: 16px;
+  border: 1px solid var(--border);
+}
+.header-icon { font-size: 32px; }
+.header-text h1 { font-size: 18px; font-weight: 600; }
+.header-text p { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+.card {
+  background: var(--card);
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.card-title {
+  font-size: 13px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+}
+.status-row + .status-row { border-top: 1px solid var(--border); }
+.status-label { font-size: 14px; color: var(--text2); }
+.status-value { font-size: 14px; font-weight: 500; }
+.status-value.running { color: var(--green); }
+.status-value.stopped { color: var(--red); }
+.status-value.disabled { color: var(--yellow); }
+
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+}
+.btn:active { transform: scale(0.96); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+.btn-primary { background: var(--blue); color: white; }
+.btn-danger { background: var(--red); color: white; }
+.btn-sm { padding: 6px 14px; font-size: 12px; }
+.btn-cyan { background: var(--cyan); color: white; }
+.btn-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.btn-group .btn { flex: 1; min-width: 80px; }
+.btn-group-2 {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.btn-group-2 .btn { flex: 1; }
+
+.connect-box {
+  background: #0d1117;
+  border: 1px solid #1e3a5f;
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 8px;
+}
+.connect-cmd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: var(--green);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.connect-hint {
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: 6px;
+}
+.cred-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.cred-label { color: var(--text2); font-size: 12px; }
+.cred-value { color: var(--cyan); }
+
+.log-area {
+  background: #0d0d0d;
+  border-radius: 10px;
+  padding: 12px;
+  max-height: 250px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #aaa;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-area::-webkit-scrollbar { width: 4px; }
+.log-area::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: #333;
+  color: white;
+  padding: 10px 24px;
+  border-radius: 24px;
+  font-size: 14px;
+  transition: 0.3s;
+  z-index: 999;
+  pointer-events: none;
+}
+.toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon">🦞</div>
+  <div class="header-text">
+    <h1>Rclone VFS <span style="font-size:0.7em;color:var(--text2)">v2.6.1</span></h1>
+    <p>全能传输站 · WebDAV + VFS Full 缓存</p>
+  </div>
+</div>
+
+<!-- Control -->
+<div class="card">
+  <div class="card-title">服务控制</div>
+  <div class="status-row">
+    <span class="status-label">服务状态</span>
+    <span class="status-value" id="stateText">--</span>
+  </div>
+  <div class="btn-group-2">
+    <button class="btn btn-primary" id="btnStart" onclick="execCmd('start')" disabled>▶️ 启动</button>
+    <button class="btn btn-danger" id="btnStop" onclick="execCmd('stop')" disabled>⏹️ 停止</button>
+  </div>
+  <div class="btn-group">
+    <button class="btn btn-sm" id="btnRestart" onclick="execCmd('restart')" disabled style="background:#555;color:white">🔄 重启</button>
+    <button class="btn btn-primary btn-sm" onclick="copyPass()">🔑 复制密码</button>
+    <button class="btn btn-cyan btn-sm" onclick="openWebdav()">📂 打开 WebDAV</button>
+  </div>
+</div>
+
+<!-- Status -->
+<div class="card">
+  <div class="card-title">运行状态</div>
+  <div class="status-row">
+    <span class="status-label">WebDAV</span>
+    <span class="status-value" id="webdavText">--</span>
+  </div>
+  <div class="status-row">
+    <span class="status-label">监听地址</span>
+    <span class="status-value" id="listenText" style="color:var(--text2);font-size:13px">--</span>
+  </div>
+  <div class="status-row">
+    <span class="status-label">运行时间</span>
+    <span class="status-value" id="uptimeText" style="color:var(--text2);font-size:13px">--</span>
+  </div>
+  <div class="status-row">
+    <span class="status-label">缓存大小</span>
+    <span class="status-value" id="cacheText">--</span>
+  </div>
+</div>
+
+<!-- Credentials -->
+<div class="card">
+  <div class="card-title">连接信息</div>
+  <div class="connect-box">
+    <div class="cred-box">
+      <span class="cred-label">用户</span>
+      <span class="cred-value" id="credUser">--</span>
+    </div>
+    <div class="cred-box">
+      <span class="cred-label">密码</span>
+      <span class="cred-value" id="credPass">••••••••</span>
+    </div>
+    <div class="cred-box">
+      <span class="cred-label">端口</span>
+      <span class="cred-value" id="credPort">--</span>
+    </div>
+    <a class="connect-cmd" id="webdavUrl" href="http://127.0.0.1:----" target="_blank" rel="noopener" style="margin-top:8px;display:block;text-decoration:none" onclick="return openWebdav(event)">http://127.0.0.1:----</a>
+    <div class="connect-hint">点击复制密码 · 点击地址打开 WebDAV</div>
+  </div>
+</div>
+
+<!-- Log -->
+<div class="card">
+  <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+    <span>运行日志</span>
+    <button class="btn btn-sm" style="background:#222;color:#aaa" onclick="loadLog()">刷新</button>
+  </div>
+  <div class="log-area" id="logArea">加载中...</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var savedPass = '';
+var isRunning = false;
+var isPending = false;
+var RCLONE_SH = '/data/adb/modules/rclone_vfs_server/scripts/rclone.sh';
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+function setBusy(busy) {
+  isPending = busy;
+  updateButtons();
+}
+
+function updateButtons() {
+  document.getElementById('btnStart').disabled = isPending || isRunning;
+  document.getElementById('btnStop').disabled = isPending || !isRunning;
+  document.getElementById('btnRestart').disabled = isPending || !isRunning;
+}
+
+function renderOfflineState() {
+  isRunning = false;
+  var stateEl = document.getElementById('stateText');
+  stateEl.textContent = '未启动';
+  stateEl.className = 'status-value stopped';
+  document.getElementById('webdavText').textContent = 'http://127.0.0.1:9876';
+  document.getElementById('listenText').textContent = '127.0.0.1:9876';
+  document.getElementById('uptimeText').textContent = 'N/A';
+  document.getElementById('cacheText').textContent = '0';
+  document.getElementById('credUser').textContent = 'admin';
+  document.getElementById('credPort').textContent = '9876';
+  document.getElementById('webdavUrl').textContent = 'http://127.0.0.1:9876';
+  document.getElementById('webdavUrl').href = 'http://127.0.0.1:9876';
+  updateButtons();
+}
+
+function execCmd(action) {
+  if (typeof ksu === 'undefined') {
+    toast('需要在 KSU 管理器中操作');
+    return;
+  }
+  if (isPending) {
+    toast('操作进行中，请稍候...');
+    return;
+  }
+
+  var label = {start:'启动中...', stop:'停止中...', restart:'重启中...'};
+  toast(label[action] || action);
+  setBusy(true);
+
+  // 直接调用 rclone.sh，不再经过 cmd_file
+  ksu.exec(RCLONE_SH + ' ' + action);
+
+  // 等指令执行完 + 状态更新
+  setTimeout(function() {
+    setBusy(false);
+    loadStatus();
+  }, 3000);
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch('./status.json?t=' + Date.now());
+    if (!r.ok) {
+      renderOfflineState();
+      return;
+    }
+    const s = await r.json();
+
+    isRunning = s.status === 'running';
+    var stateEl = document.getElementById('stateText');
+    stateEl.textContent = isRunning ? '运行中' : '已停止';
+    stateEl.className = 'status-value ' + (isRunning ? 'running' : 'stopped');
+
+    updateButtons();
+
+    document.getElementById('webdavText').textContent = 'http://127.0.0.1:' + (s.port || 9876);
+    document.getElementById('listenText').textContent = (s.listen || '127.0.0.1') + ':' + (s.port || 9876);
+    document.getElementById('uptimeText').textContent = s.uptime || 'N/A';
+    document.getElementById('cacheText').textContent = s.cache_size || '0';
+    document.getElementById('credUser').textContent = s.user || 'admin';
+    document.getElementById('credPort').textContent = s.port || 9876;
+    var url = 'http://127.0.0.1:' + (s.port || 9876);
+    var authUrl = url;
+    if (s.user && s.pass) {
+      authUrl = 'http://' + encodeURIComponent(s.user) + ':' + encodeURIComponent(s.pass) + '@127.0.0.1:' + (s.port || 9876);
+    }
+    document.getElementById('webdavUrl').textContent = url;
+    document.getElementById('webdavUrl').href = authUrl;
+
+    if (s.pass) {
+      savedPass = s.pass;
+      document.getElementById('credPass').textContent = savedPass;
+    }
+  } catch(e) {
+    renderOfflineState();
+  }
+}
+
+async function loadLog() {
+  try {
+    const r = await fetch('./log.txt?t=' + Date.now());
+    if (r.ok) {
+      const text = await r.text();
+      const area = document.getElementById('logArea');
+      area.textContent = text || '暂无日志';
+      area.scrollTop = area.scrollHeight;
+    }
+  } catch(e) {
+    document.getElementById('logArea').textContent = '日志加载失败';
+  }
+}
+
+function copyPass() {
+  if (!savedPass) {
+    toast('暂无密码信息');
+    return;
+  }
+  if (typeof ksu !== 'undefined' && ksu.copyToClipboard) {
+    ksu.copyToClipboard(savedPass);
+  } else {
+    const el = document.getElementById('credPass');
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand('copy');
+    sel.removeAllRanges();
+  }
+  toast('密码已复制');
+}
+
+function openWebdav(e) {
+  const url = document.getElementById('webdavUrl').href;
+  const w = window.open(url, '_blank');
+  if (!w || w.closed) {
+    window.location.href = url;
+  }
+  if (e) e.preventDefault();
+  return false;
+}
+
+// Init
+loadStatus();
+loadLog();
+setInterval(loadStatus, 3000);
+setInterval(loadLog, 10000);
+</script>
+</body>
+</html>

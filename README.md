@@ -8,7 +8,7 @@ Magisk / KernelSU 模块 — 基于 Rclone 的 WebDAV 文件传输服务
 - **VFS Full 缓存** — 启用 rclone VFS Full Cache 模式，离线可用
 - **KSU WebUI** — 在 KernelSU 管理器中直接启动/停止/查看状态
 - **自动启动** — 开机自启，5 秒健康检查自动重启
-- **自动端口** — 端口被占用时自动递增（9876→9877→...）
+- **状态同步** — WebUI 定期刷新运行状态、缓存大小和日志
 - **随机密码** — 每次安装自动生成随机密码
 
 ## 使用
@@ -82,8 +82,14 @@ RCLONE_CACHE_MAX_SIZE=10G  # 缓存上限
 
 在 KernelSU / Magisk 管理中卸载模块即可。
 
+## 下载
+
+- 最新成品包：`dist/rclone-vfs-server-v2.6.1-optimized.zip`
+- 更新日志：`CHANGELOG.md`
+
 ## 版本历史
 
+- **v2.6.1** — 修复状态刷新、停止标记残留、WebUI 首次启动按钮禁用问题，并加固状态 JSON 输出
 - **v2.6** — 日志分离（二进制 vs shell），WebDAV 链接嵌入凭据修复 401，清理死代码
 - **v2.5** — 架构重构，外部执行开关模式
 - **v2.2** — 性能优化

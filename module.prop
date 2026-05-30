@@ -1,0 +1,7 @@
+id=rclone_vfs_server
+name=Rclone VFS 全能传输站
+version=v2.6.1
+versionCode=9
+author=KINGYJL
+description=基于 Rclone v1.74.1 的安全文件传输服务。WebDAV:9876 | VFS Full 缓存 | KSU WebUI | 外部执行开关
+webUi=true
