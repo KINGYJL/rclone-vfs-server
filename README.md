@@ -5,9 +5,9 @@ Magisk / KernelSU 模块 — 基于 Rclone 的 WebDAV 文件传输服务
 ## 特性
 
 - **WebDAV 服务** — 在 Android 设备上提供 WebDAV 文件访问
-- **VFS Full 缓存** — 启用 rclone VFS Full Cache 模式，离线可用
+- **VFS 缓存可选** — 默认关闭（本地目录直读写，省空间）；需要时在配置中开启
 - **KSU WebUI** — 在 KernelSU 管理器中直接启动/停止/查看状态
-- **自动启动** — 开机自启，5 秒健康检查自动重启
+- **自动启动** — 开机自启，5 秒健康检查（进程存活 + 端口监听）自动重启
 - **状态同步** — WebUI 定期刷新运行状态、缓存大小和日志
 - **随机密码** — 每次安装自动生成随机密码
 
@@ -74,9 +74,13 @@ RCLONE_USER=admin          # WebDAV 用户名
 RCLONE_PASS=xxx            # WebDAV 密码
 RCLONE_PORT=9876           # 端口
 RCLONE_LISTEN=127.0.0.1    # 监听地址
-RCLONE_CACHE_MAX_AGE=720h  # 缓存有效期
-RCLONE_CACHE_MAX_SIZE=10G  # 缓存上限
+RCLONE_VFS_CACHE_MODE=off  # VFS 缓存开关：off（默认）/ full
+RCLONE_CACHE_MAX_AGE=720h  # 缓存有效期（仅 full 时生效）
+RCLONE_CACHE_MAX_SIZE=10G  # 缓存上限（仅 full 时生效）
 ```
+
+开启 VFS 缓存：把 `RCLONE_VFS_CACHE_MODE` 改为 `full`，然后重启服务。
+缓存默认存放在 `/data/adb/rclone_cache`，会占用与传输文件等量的设备空间。
 
 ## 卸载
 
@@ -84,11 +88,12 @@ RCLONE_CACHE_MAX_SIZE=10G  # 缓存上限
 
 ## 下载
 
-- 最新成品包：`dist/rclone-vfs-server-v2.6.1-optimized.zip`
+- 最新成品包：`dist/rclone-vfs-server-v2.6.2-optimized.zip`
 - 更新日志：`CHANGELOG.md`
 
 ## 版本历史
 
+- **v2.6.2** — 修复保活失效（看护退出、状态码恒为 0）、残留锁死锁；启动改为端口探活；PID 文件校验与 /proc 精确杀进程；status.json 原子写入；VFS 缓存改可选且默认关闭
 - **v2.6.1** — 修复状态刷新、停止标记残留、WebUI 首次启动按钮禁用问题，并加固状态 JSON 输出
 - **v2.6** — 日志分离（二进制 vs shell），WebDAV 链接嵌入凭据修复 401，清理死代码
 - **v2.5** — 架构重构，外部执行开关模式

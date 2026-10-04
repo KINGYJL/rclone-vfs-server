@@ -7,14 +7,14 @@ LATESTARTSERVICE=true
 
 on_install() {
     ui_print ""
-    ui_print "  🦞 Rclone VFS 全能传输站 v2.6.1"
+    ui_print "  🦞 Rclone WebDAV 传输站 v2.6.2"
     ui_print "  ================================"
     ui_print ""
     ui_print "  ✅ Rclone v1.74.1 (2026-05)"
-    ui_print "  ✅ VFS Full 缓存 (持久化存储)"
+    ui_print "  ✅ VFS 缓存可选 (默认关闭)"
     ui_print "  ✅ 随机密码自动生成"
     ui_print "  ✅ KSU WebUI 管理面板"
-    ui_print "  ✅ 进程保活 (每5秒自检)"
+    ui_print "  ✅ 进程保活 (每5秒自检 + 端口探活)"
     ui_print "  ✅ 日志轮转 (最大1MB)"
     ui_print "  ✅ 外部执行开关 (KSU Execute)"
     ui_print ""

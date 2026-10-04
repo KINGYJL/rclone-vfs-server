@@ -167,8 +167,8 @@ body {
 <div class="header">
   <div class="header-icon">🦞</div>
   <div class="header-text">
-    <h1>Rclone VFS <span style="font-size:0.7em;color:var(--text2)">v2.6.1</span></h1>
-    <p>全能传输站 · WebDAV + VFS Full 缓存</p>
+    <h1>Rclone WebDAV <span style="font-size:0.7em;color:var(--text2)">v2.6.2</span></h1>
+    <p>全能传输站 · WebDAV + 可选 VFS 缓存</p>
   </div>
 </div>
 
@@ -206,7 +206,7 @@ body {
     <span class="status-value" id="uptimeText" style="color:var(--text2);font-size:13px">--</span>
   </div>
   <div class="status-row">
-    <span class="status-label">缓存大小</span>
+    <span class="status-label">VFS 缓存</span>
     <span class="status-value" id="cacheText">--</span>
   </div>
 </div>
@@ -275,7 +275,7 @@ function renderOfflineState() {
   document.getElementById('webdavText').textContent = 'http://127.0.0.1:9876';
   document.getElementById('listenText').textContent = '127.0.0.1:9876';
   document.getElementById('uptimeText').textContent = 'N/A';
-  document.getElementById('cacheText').textContent = '0';
+  document.getElementById('cacheText').textContent = '未启用';
   document.getElementById('credUser').textContent = 'admin';
   document.getElementById('credPort').textContent = '9876';
   document.getElementById('webdavUrl').textContent = 'http://127.0.0.1:9876';
@@ -326,7 +326,7 @@ async function loadStatus() {
     document.getElementById('webdavText').textContent = 'http://127.0.0.1:' + (s.port || 9876);
     document.getElementById('listenText').textContent = (s.listen || '127.0.0.1') + ':' + (s.port || 9876);
     document.getElementById('uptimeText').textContent = s.uptime || 'N/A';
-    document.getElementById('cacheText').textContent = s.cache_size || '0';
+    document.getElementById('cacheText').textContent = (s.cache_size === 'off') ? '未启用' : (s.cache_size || '0');
     document.getElementById('credUser').textContent = s.user || 'admin';
     document.getElementById('credPort').textContent = s.port || 9876;
     var url = 'http://127.0.0.1:' + (s.port || 9876);

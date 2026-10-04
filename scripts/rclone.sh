@@ -16,6 +16,7 @@ LOCK_FILE="/data/local/tmp/rclone_vfs_lock"
 
 DEFAULT_PORT=9876
 LISTEN_ADDR="127.0.0.1"
+VFS_CACHE_MODE="off"
 CACHE_MAX_AGE="720h"
 CACHE_MAX_SIZE="10G"
 LOG_LEVEL="INFO"
@@ -38,6 +39,83 @@ json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'
 }
 
+atomic_write() {
+    # $1=目标文件 $2=内容。同目录临时文件 + mv，避免读取方读到半截内容
+    printf '%s\n' "$2" > "$1.tmp.$$" 2>/dev/null || return 1
+    mv -f "$1.tmp.$$" "$1" 2>/dev/null || return 1
+    return 0
+}
+
+exe_is_module_rclone() {
+    _exe=$1
+    [ -n "$_exe" ] || return 1
+    case "$_exe" in
+        "$BIN"|"$BIN (deleted)") return 0 ;;
+    esac
+    _real=$(readlink -f "$_exe" 2>/dev/null)
+    _real_bin=$(readlink -f "$BIN" 2>/dev/null || echo "$BIN")
+    [ -n "$_real" ] && [ "$_real" = "$_real_bin" ]
+}
+
+pid_is_rclone() {
+    _p=$1
+    case "$_p" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$_p" 2>/dev/null || return 1
+
+    _exe=$(readlink "/proc/$_p/exe" 2>/dev/null)
+    if [ -n "$_exe" ]; then
+        exe_is_module_rclone "$_exe" && return 0
+        return 1
+    fi
+
+    # 少数内核读不到 exe 时退回 cmdline 判断
+    grep -aqF "$BIN" "/proc/$_p/cmdline" 2>/dev/null
+}
+
+probe_host() {
+    case "$1" in
+        ""|0.0.0.0|::|"::"|"0.0.0.0") echo "127.0.0.1" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+port_is_listening_for_pid() {
+    _ppid=$1
+    _phost=$(probe_host "$2")
+    _pport=$3
+    _hex=$(printf '%04X' "$_pport" 2>/dev/null) || _hex=""
+
+    # 首选内核表 + socket inode 归属校验（root 下可读，最准确）
+    if [ -n "$_hex" ]; then
+        _checked=0
+        for _f in "/proc/${_ppid}/net/tcp" "/proc/${_ppid}/net/tcp6"; do
+            [ -r "$_f" ] || continue
+            _checked=1
+            _inodes=$(awk -v pat=":${_hex}" '$2 ~ (pat "$") && $4 == "0A" {print $10}' "$_f" 2>/dev/null)
+            [ -n "$_inodes" ] || continue
+            # 有监听：确认 socket 属于该进程，避免同网络命名空间里别人占端口误判
+            [ -r "/proc/${_ppid}/fd" ] || continue
+            for _inode in $_inodes; do
+                for _fd in "/proc/${_ppid}/fd"/*; do
+                    case "$(readlink "$_fd" 2>/dev/null)" in
+                        "socket:[$_inode]") return 0 ;;
+                    esac
+                done
+            done
+        done
+        [ "$_checked" = "1" ] && return 1
+    fi
+
+    # 回退：TCP 连接探测，任何响应（含 401）都算在监听
+    if command -v nc >/dev/null 2>&1; then
+        nc -w 3 "$_phost" "$_pport" </dev/null >/dev/null 2>&1 && return 0
+        return 1
+    fi
+
+    # 两种手段都不可用：不判断，交给调用方回退到 PID 存活
+    return 0
+}
+
 generate_password() {
     if [ -r /dev/urandom ]; then
         dd if=/dev/urandom bs=8 count=1 2>/dev/null | md5sum | cut -c1-16
@@ -54,7 +132,12 @@ write_status_json() {
     case "$_port" in
         ''|*[!0-9]*) _port="$DEFAULT_PORT" ;;
     esac
-    _cache_size=$(du -sh "$CACHE_DIR" 2>/dev/null | awk '{print $1}' || echo "0")
+    if [ "${RCLONE_VFS_CACHE_MODE:-$VFS_CACHE_MODE}" = "full" ]; then
+        _cache_size=$(du -sh "$CACHE_DIR" 2>/dev/null | awk '{print $1}')
+        [ -n "$_cache_size" ] || _cache_size="0"
+    else
+        _cache_size="off"
+    fi
     _log_size=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
     case "$_log_size" in
         ''|*[!0-9]*) _log_size=0 ;;
@@ -75,7 +158,8 @@ write_status_json() {
     _cache_size_json=$(json_escape "$_cache_size")
 
     mkdir -p "$MODDIR/webroot"
-    cat > "$STATUS_FILE" << EOF
+    _status_tmp="$STATUS_FILE.tmp.$$"
+    cat > "$_status_tmp" << EOF
 {
   "status": "${_status_json}",
   "pid": "${_pid_json}",
@@ -90,11 +174,11 @@ write_status_json() {
   "log_size": ${_log_size}
 }
 EOF
-    chmod 644 "$STATUS_FILE"
+    chmod 644 "$_status_tmp" 2>/dev/null
+    mv -f "$_status_tmp" "$STATUS_FILE" 2>/dev/null
 }
 
 init_config() {
-    mkdir -p "$CACHE_DIR"
     _need_gen=false
 
     if [ ! -f "$CONF_FILE" ]; then
@@ -115,6 +199,7 @@ RCLONE_USER="admin"
 RCLONE_PASS="${_pass}"
 RCLONE_PORT=${DEFAULT_PORT}
 RCLONE_LISTEN="${LISTEN_ADDR}"
+RCLONE_VFS_CACHE_MODE="${VFS_CACHE_MODE}"
 RCLONE_CACHE_MAX_AGE="${CACHE_MAX_AGE}"
 RCLONE_CACHE_MAX_SIZE="${CACHE_MAX_SIZE}"
 EOF
@@ -125,14 +210,36 @@ EOF
     . "$CONF_FILE"
     RCLONE_PORT=${RCLONE_PORT:-$DEFAULT_PORT}
     RCLONE_LISTEN=${RCLONE_LISTEN:-$LISTEN_ADDR}
+    case "${RCLONE_VFS_CACHE_MODE:-}" in
+        full) RCLONE_VFS_CACHE_MODE="full" ;;
+        *)    RCLONE_VFS_CACHE_MODE="off" ;;
+    esac
+    if [ "$RCLONE_VFS_CACHE_MODE" = "full" ]; then
+        mkdir -p "$CACHE_DIR"
+    fi
 }
 
 acquire_lock() {
-    mkdir "$LOCK_FILE" 2>/dev/null
+    if mkdir "$LOCK_FILE" 2>/dev/null; then
+        echo "$$" > "$LOCK_FILE/pid"
+        return 0
+    fi
+
+    # 锁已存在：持有者存活才算真占用，否则清理残留锁
+    _holder=$(cat "$LOCK_FILE/pid" 2>/dev/null)
+    if [ -n "$_holder" ] && kill -0 "$_holder" 2>/dev/null; then
+        return 1
+    fi
+
+    log "WARN: 清理残留锁 (holder: ${_holder:-unknown})"
+    rm -rf "$LOCK_FILE"
+    mkdir "$LOCK_FILE" 2>/dev/null || return 1
+    echo "$$" > "$LOCK_FILE/pid"
+    return 0
 }
 
 release_lock() {
-    rmdir "$LOCK_FILE" 2>/dev/null
+    rm -rf "$LOCK_FILE" 2>/dev/null
 }
 
 start_rclone() {
@@ -145,51 +252,66 @@ start_rclone() {
     }
 
     if [ -f "$PID_FILE" ]; then
-        _old_pid=$(cat "$PID_FILE")
-        if kill -0 "$_old_pid" 2>/dev/null; then
+        _old_pid=$(cat "$PID_FILE" 2>/dev/null)
+        if pid_is_rclone "$_old_pid"; then
             log "Rclone 已在运行中 (PID: $_old_pid)"
             echo "Rclone 已在运行中"
             release_lock
             return 0
         fi
+        log "WARN: PID 文件失效 (PID: ${_old_pid:-空})，忽略"
         rm -f "$PID_FILE"
     fi
 
-    mkdir -p "$CACHE_DIR"
     chmod 755 "$BIN"
     rotate_log "$LOG_FILE"
     rotate_log "$BIN_LOG_FILE"
 
     _addr="${RCLONE_LISTEN}:${RCLONE_PORT}"
+    if [ "$RCLONE_VFS_CACHE_MODE" = "full" ]; then
+        mkdir -p "$CACHE_DIR"
+        _cache_args="--vfs-cache-mode full --vfs-cache-max-age $RCLONE_CACHE_MAX_AGE --vfs-cache-max-size $RCLONE_CACHE_MAX_SIZE --cache-dir $CACHE_DIR"
+    else
+        _cache_args="--vfs-cache-mode off"
+    fi
 
     nohup "$BIN" serve webdav /storage/emulated/0 \
         --addr "${_addr}" \
         --user "${RCLONE_USER}" \
         --pass "${RCLONE_PASS}" \
-        --vfs-cache-mode full \
-        --vfs-cache-max-age "${RCLONE_CACHE_MAX_AGE}" \
-        --vfs-cache-max-size "${RCLONE_CACHE_MAX_SIZE}" \
-        --cache-dir "${CACHE_DIR}" \
+        ${_cache_args} \
         --log-file "${BIN_LOG_FILE}" \
         --log-level "${LOG_LEVEL}" \
         > /dev/null 2>&1 &
 
     _pid=$!
-    echo "$_pid" > "$PID_FILE"
-    echo "${RCLONE_PORT}" > "$PORT_FILE"
+    atomic_write "$PID_FILE" "$_pid"
+    atomic_write "$PORT_FILE" "${RCLONE_PORT}"
 
-    sleep 2
-    if kill -0 "$_pid" 2>/dev/null; then
+    # 真探活：进程存活 + 端口进入 LISTEN，最多等 10 秒
+    _wait=0
+    while [ $_wait -lt 10 ]; do
+        kill -0 "$_pid" 2>/dev/null || break
+        port_is_listening_for_pid "$_pid" "$RCLONE_LISTEN" "$RCLONE_PORT" && break
+        sleep 1
+        _wait=$((_wait + 1))
+    done
+
+    # 再等 1 秒复查：绑定失败的 rclone 会立刻退出，避免端口被别的进程占用时误报成功
+    sleep 1
+    if kill -0 "$_pid" 2>/dev/null && port_is_listening_for_pid "$_pid" "$RCLONE_LISTEN" "$RCLONE_PORT"; then
         log "Rclone 已启动 (PID: $_pid, 端口: ${RCLONE_PORT}, 监听: ${RCLONE_LISTEN})"
         write_status_json "running"
         echo "启动成功 (PID: $_pid)"
         release_lock
         return 0
     else
-        log "ERROR: Rclone 启动失败"
+        log "ERROR: Rclone 启动失败 (端口: ${RCLONE_PORT})"
+        [ -f "$BIN_LOG_FILE" ] && tail -3 "$BIN_LOG_FILE" >> "$LOG_FILE" 2>/dev/null
+        kill -9 "$_pid" 2>/dev/null
         write_status_json "stopped"
         rm -f "$PID_FILE"
-        echo "启动失败"
+        echo "启动失败: rclone 未在 ${_addr} 监听"
         release_lock
         return 1
     fi
@@ -208,14 +330,19 @@ stop_rclone() {
 
     if [ -f "$PID_FILE" ]; then
         _old_pid=$(cat "$PID_FILE" 2>/dev/null)
-        [ -n "$_old_pid" ] && kill_process_tree "$_old_pid"
+        if pid_is_rclone "$_old_pid"; then
+            kill_process_tree "$_old_pid"
+        else
+            log "WARN: PID 文件失效 (PID: ${_old_pid:-空})，跳过"
+        fi
         rm -f "$PID_FILE"
     fi
 
-    _bin_name=$(basename "$BIN")
-    ps 2>/dev/null | grep "[${_bin_name%?}]${_bin_name#?}" | while read _line; do
-        _p=$(echo "$_line" | awk '{print $2}')
-        [ -n "$_p" ] && [ "$_p" != "$$" ] && kill "$_p" 2>/dev/null
+    # 兜底：只杀 exe 指向本模块 rclone 的进程，避免误伤其他 rclone
+    for _proc in /proc/[0-9]*; do
+        _p=${_proc#/proc/}
+        [ "$_p" = "$$" ] && continue
+        exe_is_module_rclone "$(readlink "$_proc/exe" 2>/dev/null)" && kill "$_p" 2>/dev/null
     done
 
     sleep 1
@@ -226,8 +353,11 @@ stop_rclone() {
 
 health_check_rclone() {
     _pid=$(cat "$PID_FILE" 2>/dev/null)
-    [ -z "$_pid" ] && return 1
-    kill -0 "$_pid" 2>/dev/null || return 1
+    pid_is_rclone "$_pid" || return 1
+    . "$CONF_FILE" 2>/dev/null
+    _listen=${RCLONE_LISTEN:-$LISTEN_ADDR}
+    _port=$(cat "$PORT_FILE" 2>/dev/null || echo "${RCLONE_PORT:-$DEFAULT_PORT}")
+    port_is_listening_for_pid "$_pid" "$_listen" "$_port" || return 1
     return 0
 }
 
@@ -237,12 +367,8 @@ cmd_start() {
 }
 
 cmd_stop() {
+    # 不杀看护进程：stop_flag 让看护空转，下一次 start 仍然受看护
     stop_rclone
-    if [ -f "$WATCHDOG_PID_FILE" ]; then
-        _wpid=$(cat "$WATCHDOG_PID_FILE")
-        kill -0 "$_wpid" 2>/dev/null && kill "$_wpid" 2>/dev/null
-        rm -f "$WATCHDOG_PID_FILE"
-    fi
 }
 
 cmd_restart() {
@@ -263,10 +389,12 @@ cmd_status() {
         echo "端口: $_port"
         echo "运行时间: $_uptime"
         echo "用户: ${RCLONE_USER:-admin}"
+        return 0
     else
         init_config
         write_status_json "stopped"
         echo "状态: 已停止"
+        return 1
     fi
 }
 
@@ -292,4 +420,4 @@ case "${1:-status}" in
         ;;
 esac
 
-exit 0
+exit $?

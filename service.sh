@@ -50,13 +50,26 @@ wait_for_storage
 echo "$$" > "$WATCHDOG_PID_FILE"
 
 _sync_tick=0
-while [ ! -f "$STOP_FLAG_FILE" ]; do
+_restart_pending=0
+while true; do
+    # 用户主动停止：看护空转等待，不退出，这样之后的 start 仍有保活
+    if [ -f "$STOP_FLAG_FILE" ]; then
+        sleep 5
+        continue
+    fi
+
     if ! "$RCLONE_SH" status > /dev/null 2>&1; then
-        log "WARN: 进程异常退出，5 秒后自动重启..."
+        if [ "$_restart_pending" != "1" ]; then
+            log "WARN: 进程异常退出，5 秒后自动重启..."
+            _restart_pending=1
+        fi
         sleep 5
         if [ ! -f "$STOP_FLAG_FILE" ]; then
             "$RCLONE_SH" start >> "$LOG_FILE" 2>&1
         fi
+    elif [ "$_restart_pending" = "1" ]; then
+        log "进程已恢复"
+        _restart_pending=0
     fi
 
     _sync_tick=$((_sync_tick + 1))
@@ -71,5 +84,3 @@ while [ ! -f "$STOP_FLAG_FILE" ]; do
 
     sleep 5
 done
-
-cleanup
